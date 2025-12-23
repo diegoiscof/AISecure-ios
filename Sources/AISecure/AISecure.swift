@@ -19,14 +19,16 @@ public enum AISecure {
 
     /// Creates an OpenAI service instance
     ///
+    /// 🔒 SECURITY: Credentials are fetched dynamically from backend (no hardcoded keys)
+    ///
     /// Features:
     /// - Full OpenAI API support (chat, embeddings, audio, vision, etc.)
     /// - Model can be specified from SDK or configured in dashboard
     /// - Raw OpenAI response format
+    /// - Dynamic credential issuance via JWT
     ///
     /// - Parameters:
     ///   - serviceURL: The service gateway URL (format: https://api.gateway.com/openai-{serviceId})
-    ///   - partialKey: The partial API key
     ///   - backendURL: The AISecure backend URL
     ///
     /// - Returns: An instance of OpenAIService configured and ready to make requests
@@ -35,17 +37,11 @@ public enum AISecure {
     @MainActor
     public static func openAIService(
         serviceURL: String,
-        partialKey: String,
         backendURL: String
     ) throws -> OpenAIService {
-        let service = try AISecureServiceConfig(
+        let (configuration, sessionManager, requestBuilder, urlSession, deviceAuth) = try createServiceDependenciesWithJWT(
             provider: "openai",
             serviceURL: serviceURL,
-            partialKey: partialKey
-        )
-
-        let (configuration, sessionManager, requestBuilder, urlSession) = try createServiceDependencies(
-            service: service,
             backendURL: backendURL
         )
 
@@ -53,16 +49,52 @@ public enum AISecure {
             configuration: configuration,
             sessionManager: sessionManager,
             requestBuilder: requestBuilder,
-            urlSession: urlSession
+            urlSession: urlSession,
+            deviceAuthenticator: deviceAuth
         )
     }
 
     /// Creates an Anthropic service instance
     ///
+    /// 🔒 SECURITY: Credentials are fetched dynamically from backend (no hardcoded keys)
+    ///
     /// Features:
     /// - Full Anthropic API support (messages, function calling, vision, etc.)
     /// - Model can be specified from SDK or configured in dashboard
     /// - Raw Anthropic response format
+    /// - Dynamic credential issuance via JWT
+    ///
+    /// - Parameters:
+    ///   - serviceURL: The service gateway URL (format: https://api.gateway.com/anthropic-{serviceId})
+    ///   - backendURL: The AISecure backend URL
+    ///
+    /// - Returns: An instance of AnthropicService configured and ready to make requests
+    ///
+    /// - Throws: AISecureError if the configuration is invalid
+    @MainActor
+    public static func anthropicService(
+        serviceURL: String,
+        backendURL: String
+    ) throws -> AnthropicService {
+        let (configuration, sessionManager, requestBuilder, urlSession, deviceAuth) = try createServiceDependenciesWithJWT(
+            provider: "anthropic",
+            serviceURL: serviceURL,
+            backendURL: backendURL
+        )
+
+        return AnthropicService(
+            configuration: configuration,
+            sessionManager: sessionManager,
+            requestBuilder: requestBuilder,
+            urlSession: urlSession,
+            deviceAuthenticator: deviceAuth
+        )
+    }
+
+    /// Creates an Anthropic service instance (Legacy - with hardcoded credentials)
+    ///
+    /// ⚠️ DEPRECATED: This method requires hardcoded credentials which can be extracted from your app.
+    /// Use `anthropicService(serviceURL:backendURL:)` instead for JWT-based dynamic credentials.
     ///
     /// - Parameters:
     ///   - serviceURL: The service gateway URL (format: https://api.gateway.com/anthropic-{serviceId})
@@ -72,8 +104,9 @@ public enum AISecure {
     /// - Returns: An instance of AnthropicService configured and ready to make requests
     ///
     /// - Throws: AISecureError if the configuration is invalid
+    @available(*, deprecated, message: "Use anthropicService(serviceURL:backendURL:) for JWT-based authentication instead")
     @MainActor
-    public static func anthropicService(
+    public static func anthropicServiceLegacy(
         serviceURL: String,
         partialKey: String,
         backendURL: String
@@ -98,6 +131,54 @@ public enum AISecure {
     }
 
     // MARK: - Private Helpers
+
+    /// Creates service dependencies with JWT-based authentication
+    /// 🔒 SECURITY: Credentials fetched dynamically from backend, no hardcoded keys
+    @MainActor
+    private static func createServiceDependenciesWithJWT(
+        provider: String,
+        serviceURL: String,
+        backendURL: String
+    ) throws -> (AISecureConfiguration, AISecureSessionManager, AISecureRequestBuilder, URLSession, AISecureDeviceAuthenticator) {
+        guard let url = URL(string: backendURL) else {
+            throw AISecureError.invalidConfiguration("Invalid backend URL: \(backendURL)")
+        }
+
+        let deviceFingerprint = DeviceFingerprint.generate()
+        let urlSession = createURLSession()
+        let storage = AISecureStorage()
+
+        // Create device authenticator (gets JWT with dynamic credentials)
+        let deviceAuth = AISecureDeviceAuthenticator(
+            backendURL: url,
+            serviceURL: serviceURL,
+            deviceFingerprint: deviceFingerprint,
+            urlSession: urlSession,
+            storage: storage
+        )
+
+        // Temporary service config (will be replaced with JWT credentials)
+        let temporaryService = try AISecureServiceConfig(
+            provider: provider,
+            serviceURL: serviceURL,
+            partialKey: "temporary" // Will be replaced by JWT payload
+        )
+
+        let configuration = AISecureConfiguration(
+            backendURL: url,
+            deviceFingerprint: deviceFingerprint,
+            service: temporaryService
+        )
+
+        let sessionManager = AISecureSessionManager(
+            configuration: configuration,
+            storage: storage,
+            urlSession: urlSession
+        )
+        let requestBuilder = AISecureDefaultRequestBuilder(configuration: configuration)
+
+        return (configuration, sessionManager, requestBuilder, urlSession, deviceAuth)
+    }
 
     @MainActor
     private static func createServiceDependencies(

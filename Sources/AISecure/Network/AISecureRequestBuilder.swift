@@ -90,7 +90,8 @@ public struct AISecureDefaultRequestBuilder: AISecureRequestBuilder, Sendable {
         }
 
         let bodyBase64 = body.base64EncodedString()
-        let message = "\(timestamp):\(normalizedEndpoint):\(bodyBase64):\(session.sessionToken)"
+        // 🔒 SECURITY: Include provider + serviceId to bind signature to specific service
+        let message = "\(timestamp):\(service.provider):\(service.serviceId):\(normalizedEndpoint):\(bodyBase64):\(session.sessionToken)"
 
         // ✅ MUST match Lambda: raw sessionToken as HMAC key
         let key = SymmetricKey(data: Data(session.sessionToken.utf8))

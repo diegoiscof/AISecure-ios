@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import CryptoKit
 
 @AISecureActor public class AISecureSessionManager: Sendable {
     private let configuration: AISecureConfiguration
@@ -24,7 +25,7 @@ import Foundation
         self.urlSession = urlSession
     }
 
-    public func getValidSession(forceRefresh: Bool = false) async throws -> AISecureSession {
+    public func getValidSession(forceRefresh: Bool = false, partialKey: String? = nil) async throws -> AISecureSession {
         // Force refresh skips cache check
         if !forceRefresh {
             // Check cached session first
@@ -46,7 +47,7 @@ import Foundation
 
         // Create new session
         logIf(.debug)?.debug("🔄 Creating new session")
-        let session = try await createSession()
+        let session = try await createSession(partialKey: partialKey)
         cachedSession = session
         try? storage.saveSession(session, for: configuration.service.serviceURL)
         return session
@@ -58,16 +59,33 @@ import Foundation
         storage.deleteSession(for: configuration.service.serviceURL)
     }
 
-    private func createSession() async throws -> AISecureSession {
+    private func createSession(partialKey: String? = nil) async throws -> AISecureSession {
         let endpoint = configuration.backendURL.appendingPathComponent("api/sessions")
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
+        // Use provided partialKey (from JWT) or fall back to configuration
+        let activePartialKey = partialKey ?? configuration.service.partialKey
+
+        // 🔒 SECURITY: Sign session creation request with partialKey
+        let timestamp = String(Int(Date().timeIntervalSince1970))
+        let message = "\(timestamp):\(configuration.deviceFingerprint)"
+
+        let key = SymmetricKey(data: Data(activePartialKey.utf8))
+        let signature = HMAC<SHA256>.authenticationCode(
+            for: Data(message.utf8),
+            using: key
+        )
+        let signatureBase64 = Data(signature).base64EncodedString()
+
+        request.setValue(signatureBase64, forHTTPHeaderField: "x-project-signature")
+        request.setValue(timestamp, forHTTPHeaderField: "x-timestamp")
+
         // Generate rich device metadata
         let metadataString = await DeviceMetadata.generateMetadataString(
-            partialKey: configuration.service.partialKey
+            partialKey: activePartialKey
         )
         let metadataBase64 = Data(metadataString.utf8).base64EncodedString()
 

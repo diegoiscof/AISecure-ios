@@ -8,21 +8,43 @@
 import Foundation
 
 @AISecureActor public class AnthropicService: Sendable {
-    private let configuration: AISecureConfiguration
+    private var configuration: AISecureConfiguration
     private let sessionManager: AISecureSessionManager
     private let requestBuilder: AISecureRequestBuilder
     private let urlSession: URLSession
+    private let deviceAuthenticator: AISecureDeviceAuthenticator?
 
     nonisolated init(
         configuration: AISecureConfiguration,
         sessionManager: AISecureSessionManager,
         requestBuilder: AISecureRequestBuilder,
-        urlSession: URLSession
+        urlSession: URLSession,
+        deviceAuthenticator: AISecureDeviceAuthenticator? = nil
     ) {
         self.configuration = configuration
         self.sessionManager = sessionManager
         self.requestBuilder = requestBuilder
         self.urlSession = urlSession
+        self.deviceAuthenticator = deviceAuthenticator
+    }
+
+    /// Get service config with credentials from JWT (if using JWT auth)
+    private func getServiceConfig() async throws -> AISecureServiceConfig {
+        guard let authenticator = deviceAuthenticator else {
+            // No JWT auth, use existing config
+            return configuration.service
+        }
+
+        // Get JWT and decode to extract partialKey
+        let jwt = try await authenticator.getValidJWT()
+        let payload = try jwt.decodePayload()
+
+        // Create service config with partialKey from JWT
+        return try AISecureServiceConfig(
+            provider: payload.provider,
+            serviceURL: configuration.service.serviceURL,
+            partialKey: payload.partialKey
+        )
     }
 
     /// Creates a message with Claude
@@ -68,10 +90,17 @@ import Foundation
         response: T.Type
     ) async throws -> T {
         var retriedOnce = false
+        var jwtRetried = false
 
         while true {
-            let session = try await sessionManager.getValidSession(forceRefresh: retriedOnce)
-            let service = configuration.service
+            // 🔑 Get credentials from JWT first (needed for session creation signature)
+            let service = try await getServiceConfig()
+
+            // Pass partialKey to session manager for signature verification
+            let session = try await sessionManager.getValidSession(
+                forceRefresh: retriedOnce,
+                partialKey: service.partialKey
+            )
 
             let bodyData = try JSONSerialization.data(withJSONObject: body)
             let request = requestBuilder.buildRequest(
@@ -85,12 +114,25 @@ import Foundation
 
             let (data, urlResponse) = try await urlSession.data(for: request)
 
-            // Check for 401 error - session expired
-            if let http = urlResponse as? HTTPURLResponse, http.statusCode == 401, !retriedOnce {
-                logIf(.info)?.info("⚠️ Session expired, refreshing and retrying...")
-                sessionManager.invalidateSession()
-                retriedOnce = true
-                continue
+            // Check for 401 error - could be session expired OR JWT expired
+            if let http = urlResponse as? HTTPURLResponse, http.statusCode == 401 {
+                if !jwtRetried, let authenticator = deviceAuthenticator {
+                    // Try refreshing JWT first
+                    logIf(.info)?.info("⚠️ JWT may be expired, refreshing...")
+                    authenticator.invalidateJWT()
+                    jwtRetried = true
+                    continue
+                } else if !retriedOnce {
+                    // Then try refreshing session
+                    logIf(.info)?.info("⚠️ Session expired, refreshing and retrying...")
+                    sessionManager.invalidateSession()
+                    retriedOnce = true
+                    jwtRetried = false
+                    continue
+                } else {
+                    // Both JWT and session refresh failed
+                    logIf(.error)?.error("❌ Authentication failed after retries")
+                }
             }
 
             try validate(response: urlResponse, data: data)

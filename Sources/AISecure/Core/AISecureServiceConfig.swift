@@ -12,6 +12,23 @@ public struct AISecureServiceConfig: Sendable {
     public let serviceURL: String
     public let partialKey: String
 
+    /// Extracts serviceId from the serviceURL
+    /// Example: "https://api.gateway.com/openai-abc123/..." -> "abc123"
+    public var serviceId: String {
+        guard let url = URL(string: serviceURL),
+              let firstComponent = url.pathComponents.dropFirst().first else {
+            return ""
+        }
+
+        // Extract serviceId from format: {provider}-{serviceId}
+        let components = firstComponent.split(separator: "-")
+        if components.count >= 2 {
+            return String(components.dropFirst().joined(separator: "-"))
+        }
+
+        return ""
+    }
+
     /// Creates a service configuration
     ///
     /// - Parameters:

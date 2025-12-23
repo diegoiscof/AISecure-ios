@@ -42,7 +42,6 @@ struct ContentView: View {
         do {
             let openAI = try AISecure.openAIService(
                 serviceURL: "https://xifm3whdw1.execute-api.us-east-2.amazonaws.com/openai-0c8bef0e834f7294",
-                partialKey: "c2stcHJvai1mb2JLMHNXbUNFZFlVNUd6OUlXR1NyZWxSWXZaTi1ia1lzc18zbDY3aC1Gd1pPaXFiRjZ6ZjdZak1wQUZNUHA5QTlEQWdHcW1QTA==",
                 backendURL: "https://str-concord-browsing-helped.trycloudflare.com"
             )
 
@@ -76,8 +75,7 @@ struct ContentView: View {
         do {
             let anthropic = try AISecure.anthropicService(
                 serviceURL: "https://xifm3whdw1.execute-api.us-east-2.amazonaws.com/anthropic-bf08e7c14d1ef2f8",
-                partialKey: "c2stYW50LWFwaTAzLXdPSmh6QWRHT2NaTGo1YVdfWUZGb1ZsUzJPZWJtU3BhdDRTbWY3WHNR",
-                backendURL: "https://prove-enjoying-clerk-monetary.trycloudflare.com"
+                backendURL: "https://str-concord-browsing-helped.trycloudflare.com"
             )
 
             // With direct routing, YOU specify the model
