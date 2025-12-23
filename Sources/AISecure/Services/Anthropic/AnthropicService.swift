@@ -36,7 +36,7 @@ import Foundation
     /// - Returns: The message response
     public func createMessage(
         messages: [AnthropicMessage],
-        model: String = "claude-3-5-sonnet-20241022",
+        model: String = "claude-sonnet-4-5-20250929",
         maxTokens: Int = 1024,
         temperature: Double = 1.0,
         system: String? = nil

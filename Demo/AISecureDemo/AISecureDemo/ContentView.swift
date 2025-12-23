@@ -64,13 +64,13 @@ struct ContentView: View {
     func testAnthropic() async {
         do {
             let anthropic = try AISecure.anthropicService(
-                serviceURL: "https://your-anthropic-url.com",
-                partialKey: "your-anthropic-partial-key",
+                serviceURL: "https://xifm3whdw1.execute-api.us-east-2.amazonaws.com/anthropic-8bffcad853d69314",
+                partialKey: "c2stYW50LWFwaTAzLXdPSmh6QWRHT2NaTGo1YVdfWUZGb1ZsUzJPZWJtU3BhdDRTbWY3WHNR",
                 backendURL: "https://bee-extras-intellectual-walt.trycloudflare.com"
             )
 
             let response = try await anthropic.createMessage(
-                messages: [.init(role: "user", content: "Say hello in one sentence")],
+                messages: [.init(role: "user", content: "Say a common italian phrase")],
                 maxTokens: 100
             )
             print("Anthropic Response:", response.content.first?.text ?? "")
