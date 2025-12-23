@@ -31,6 +31,58 @@ public enum AISecure {
         services: [AISecureServiceConfig],
         backendURL: String
     ) throws -> OpenAIService {
+        let (configuration, sessionManager, requestBuilder, urlSession) = try createServiceDependencies(
+            projectId: projectId,
+            services: services,
+            backendURL: backendURL
+        )
+
+        return OpenAIService(
+            configuration: configuration,
+            sessionManager: sessionManager,
+            requestBuilder: requestBuilder,
+            urlSession: urlSession
+        )
+    }
+
+    /// Creates an Anthropic service instance
+    ///
+    /// - Parameters:
+    ///   - projectId: Your AISecure project ID
+    ///   - services: Array of service configurations
+    ///   - backendURL: The AISecure backend URL
+    ///
+    /// - Returns: An instance of AnthropicService configured and ready to make requests
+    ///
+    /// - Throws: AISecureError if the configuration is invalid
+    @MainActor
+    public static func anthropicService(
+        projectId: String,
+        services: [AISecureServiceConfig],
+        backendURL: String
+    ) throws -> AnthropicService {
+        let (configuration, sessionManager, requestBuilder, urlSession) = try createServiceDependencies(
+            projectId: projectId,
+            services: services,
+            backendURL: backendURL
+        )
+
+        return AnthropicService(
+            configuration: configuration,
+            sessionManager: sessionManager,
+            requestBuilder: requestBuilder,
+            urlSession: urlSession
+        )
+    }
+
+    // MARK: - Private Helpers
+
+    @MainActor
+    private static func createServiceDependencies(
+        projectId: String,
+        services: [AISecureServiceConfig],
+        backendURL: String
+    ) throws -> (AISecureConfiguration, AISecureSessionManager, AISecureRequestBuilder, URLSession) {
         guard !projectId.isEmpty else {
             throw AISecureError.invalidConfiguration("Project ID cannot be empty")
         }
@@ -59,12 +111,7 @@ public enum AISecure {
         )
         let requestBuilder = AISecureDefaultRequestBuilder(configuration: configuration)
 
-        return OpenAIService(
-            configuration: configuration,
-            sessionManager: sessionManager,
-            requestBuilder: requestBuilder,
-            urlSession: urlSession
-        )
+        return (configuration, sessionManager, requestBuilder, urlSession)
     }
 
     /// Creates a URLSession configured for AISecure
