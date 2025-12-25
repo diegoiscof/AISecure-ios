@@ -109,16 +109,5 @@ public struct AISecureDefaultRequestBuilder: AISecureRequestBuilder, Sendable {
         // Log request details
         let logEndpoint = endpoint.isEmpty ? "(universal routing)" : endpoint
         logIf(.debug)?.debug("➡️ Request to \(logEndpoint)")
-        let headers = request.allHTTPHeaderFields ?? [:]
-        logIf(.debug)?.debug("Headers: \(headers)")
-
-        // Log request body for debugging model injection
-        if let bodyJSON = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
-            if let model = bodyJSON["model"] as? String {
-                logIf(.debug)?.debug("Request body model: \(model)")
-            } else {
-                logIf(.debug)?.debug("Request body has no model (will use dashboard default)")
-            }
-        }
     }
 }

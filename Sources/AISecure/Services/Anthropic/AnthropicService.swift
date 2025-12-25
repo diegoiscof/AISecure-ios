@@ -71,99 +71,28 @@ import Foundation
         body: [String: Any],
         response: T.Type
     ) async throws -> T {
-        var retriedOnce = false
-        var jwtRetried = false
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
 
-        while true {
-            // 🔑 Get JWT and decode payload
-            let jwt = try await deviceAuthenticator?.getValidJWT()
-            let payload = try jwt?.decodePayload()
-
-            // Get service config from JWT (or use configuration if no JWT auth)
-            let service: AISecureServiceConfig
-            if let payload = payload {
-                service = try AISecureServiceConfig(
-                    provider: payload.provider,
-                    serviceURL: configuration.service.serviceURL,
-                    partialKey: payload.partialKey
-                )
-            } else {
-                service = configuration.service
-            }
-
-            // Get session from JWT payload (no backend call!)
-            let session: AISecureSession
-            if let payload = payload {
-                session = try await sessionManager.getValidSession(
-                    forceRefresh: retriedOnce || jwtRetried,
-                    jwtPayload: payload
-                )
-            } else {
-                // Fallback for legacy auth (no JWT)
-                throw AISecureError.invalidConfiguration("JWT authentication required")
-            }
-
-            let bodyData = try JSONSerialization.data(withJSONObject: body)
-            let request = requestBuilder.buildRequest(
+        let (data, urlResponse) = try await AISecureServiceHelpers.executeWithRetry(
+            deviceAuthenticator: deviceAuthenticator,
+            sessionManager: sessionManager,
+            configuration: configuration
+        ) { service, session in
+            let request = self.requestBuilder.buildRequest(
                 endpoint: endpoint,
                 body: bodyData,
                 session: session,
                 service: service
             )
-
-            logIf(.debug)?.debug("➡️ Request to \(endpoint)")
-
-            let (data, urlResponse) = try await urlSession.data(for: request)
-
-            // Check for 401 error - could be session expired OR JWT expired
-            if let http = urlResponse as? HTTPURLResponse, http.statusCode == 401 {
-                if !jwtRetried, let authenticator = deviceAuthenticator {
-                    // Try refreshing JWT first
-                    logIf(.info)?.info("⚠️ JWT may be expired, refreshing...")
-                    authenticator.invalidateJWT()
-                    jwtRetried = true
-                    continue
-                } else if !retriedOnce {
-                    // Then try refreshing session
-                    logIf(.info)?.info("⚠️ Session expired, refreshing and retrying...")
-                    sessionManager.invalidateSession()
-                    retriedOnce = true
-                    jwtRetried = false
-                    continue
-                } else {
-                    // Both JWT and session refresh failed
-                    logIf(.error)?.error("❌ Authentication failed after retries")
-                }
-            }
-
-            try validate(response: urlResponse, data: data)
-
-            do {
-                return try JSONDecoder().decode(T.self, from: data)
-            } catch {
-                throw AISecureError.decodingError(error)
-            }
-        }
-    }
-
-    private func validate(response: URLResponse, data: Data) throws {
-        guard let http = response as? HTTPURLResponse else {
-            throw AISecureError.invalidResponse
+            return try await self.urlSession.data(for: request)
         }
 
-        guard (200...299).contains(http.statusCode) else {
-            let body: Any
-            do {
-                body = try JSONSerialization.jsonObject(with: data)
-            } catch {
-                body = [
-                    "error": "Failed to parse error response",
-                    "raw": String(data: data, encoding: .utf8) ?? "Unable to decode data"
-                ]
-            }
+        try AISecureServiceHelpers.validateResponse(urlResponse, data: data)
 
-            logIf(.error)?.error("HTTP \(http.statusCode) error: \(String(describing: body))")
-            throw AISecureError.httpError(status: http.statusCode, body: body)
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            throw AISecureError.decodingError(error)
         }
     }
 }

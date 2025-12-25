@@ -35,23 +35,18 @@ import CryptoKit
         if !forceRefresh {
             // Check cached session first
             if let cached = cachedSession, !cached.isExpired {
-                logIf(.debug)?.debug("✅ Using cached session")
                 return cached
             }
 
             // Check storage
             if let stored = try? storage.loadSession(for: configuration.service.serviceURL),
                !stored.isExpired {
-                logIf(.debug)?.debug("✅ Using stored session")
                 cachedSession = stored
                 return stored
             }
-        } else {
-            logIf(.debug)?.debug("🔄 Force refreshing session (previous session expired)")
         }
 
         // Create session from JWT payload (no backend call!)
-        logIf(.debug)?.debug("✅ Creating session from JWT payload")
         let session = createSessionFromJWT(jwtPayload)
         cachedSession = session
         try? storage.saveSession(session, for: configuration.service.serviceURL)

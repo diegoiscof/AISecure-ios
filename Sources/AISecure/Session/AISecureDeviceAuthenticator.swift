@@ -37,22 +37,17 @@ public class AISecureDeviceAuthenticator: Sendable {
         // Check cache first
         if !forceRefresh {
             if let cached = cachedJWT, !cached.isExpired {
-                logIf(.debug)?.debug("✅ Using cached JWT")
                 return cached
             }
 
             // Check storage
             if let stored = try? storage.loadJWT(for: serviceURL), !stored.isExpired {
-                logIf(.debug)?.debug("✅ Using stored JWT")
                 cachedJWT = stored
                 return stored
             }
-        } else {
-            logIf(.debug)?.debug("🔄 Force refreshing JWT (previous JWT expired)")
         }
 
         // Authenticate with backend
-        logIf(.debug)?.debug("🔄 Authenticating device with backend")
         let jwt = try await authenticateDevice()
         cachedJWT = jwt
         try? storage.saveJWT(jwt, for: serviceURL)
@@ -79,8 +74,6 @@ public class AISecureDeviceAuthenticator: Sendable {
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        logIf(.debug)?.debug("➡️  Authenticating device for \(self.serviceURL)")
-
         let (data, response) = try await urlSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -89,12 +82,10 @@ public class AISecureDeviceAuthenticator: Sendable {
 
         guard (200...299).contains(httpResponse.statusCode) else {
             let errorBody = try? JSONSerialization.jsonObject(with: data)
-            logIf(.error)?.error("Device authentication failed: \(httpResponse.statusCode)")
+            logIf(.error)?.error("Device auth failed: \(httpResponse.statusCode)")
             throw AISecureError.httpError(status: httpResponse.statusCode, body: errorBody ?? [:])
         }
 
-        let jwt = try JSONDecoder().decode(DeviceJWT.self, from: data)
-        logIf(.debug)?.debug("✅ Device authenticated, JWT expires at \(jwt.expiresAt)")
-        return jwt
+        return try JSONDecoder().decode(DeviceJWT.self, from: data)
     }
 }
