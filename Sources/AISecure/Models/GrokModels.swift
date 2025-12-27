@@ -9,6 +9,7 @@ import Foundation
 
 // MARK: - Grok uses OpenAI-compatible API
 // We reuse OpenAI response models for compatibility
+// Including OpenAIChatResponse and OpenAIChatStreamDelta
 
 /// Grok-specific request configuration
 public struct GrokChatRequest {

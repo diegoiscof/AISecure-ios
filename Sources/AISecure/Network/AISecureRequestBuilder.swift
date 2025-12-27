@@ -67,6 +67,9 @@ public struct AISecureDefaultRequestBuilder: AISecureRequestBuilder, Sendable {
         request.setValue(timestamp, forHTTPHeaderField: "x-timestamp")
         request.setValue(configuration.deviceFingerprint, forHTTPHeaderField: "x-device-fingerprint")
         request.setValue(service.provider, forHTTPHeaderField: "x-provider")
+        if service.provider == "anthropic" {
+            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        }
 
         let normalizedEndpoint = endpoint.hasPrefix("/") ? endpoint : "/" + endpoint
 

@@ -182,6 +182,41 @@ import Foundation
         )
     }
 
+    /// Creates a streaming chat completion request
+    ///
+    /// - Parameters:
+    ///   - messages: Array of chat messages
+    ///   - model: The model to use (default: "gpt-4")
+    ///   - temperature: Sampling temperature between 0 and 2 (default: 1)
+    ///   - onChunk: Closure called for each streamed chunk with delta content
+    /// - Throws: AISecureError if the request fails
+    public func chatStream(
+        messages: [ChatMessage],
+        model: String = "",
+        temperature: Double = 1,
+        onChunk: @escaping @Sendable (OpenAIChatStreamDelta) -> Void
+    ) async throws {
+        guard !messages.isEmpty else {
+            throw AISecureError.invalidConfiguration("Messages cannot be empty")
+        }
+        guard (0...2).contains(temperature) else {
+            throw AISecureError.invalidConfiguration("Temperature must be between 0 and 2")
+        }
+
+        let body: [String: Any] = [
+            "model": model,
+            "messages": messages.map { ["role": $0.role, "content": $0.content] },
+            "temperature": temperature,
+            "stream": true  // ⭐ Enable streaming
+        ]
+
+        try await streamRequest(
+            endpoint: "/v1/chat/completions",
+            body: body,
+            onChunk: onChunk
+        )
+    }
+
     // MARK: - Private Methods
 
     private func jsonRequest<T: Decodable>(
@@ -210,6 +245,10 @@ import Foundation
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
+            // Log the raw response for debugging
+            if let responseString = String(data: data, encoding: .utf8) {
+                logIf(.error)?.error("❌ Decoding failed. Raw response: \(responseString)")
+            }
             throw AISecureError.decodingError(error)
         }
     }
@@ -239,5 +278,73 @@ import Foundation
 
         try AISecureServiceHelpers.validateResponse(urlResponse, data: data)
         return data
+    }
+
+    private func streamRequest(
+        endpoint: String,
+        body: [String: Any],
+        onChunk: @escaping @Sendable (OpenAIChatStreamDelta) -> Void
+    ) async throws {
+        let bodyData = try JSONSerialization.data(
+            withJSONObject: body,
+            options: [.sortedKeys]
+        )
+
+        try await AISecureServiceHelpers.executeWithRetry(
+            deviceAuthenticator: deviceAuthenticator,
+            sessionManager: sessionManager,
+            configuration: configuration
+        ) { service, session in
+            let request = self.requestBuilder.buildRequest(
+                endpoint: endpoint,
+                body: bodyData,
+                session: session,
+                service: service
+            )
+
+            // Use URLSession.bytes for streaming
+            let (bytes, response) = try await self.urlSession.bytes(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+//                throw AISecureError.networkError("Invalid response type")
+                throw AISecureError.invalidResponse
+            }
+
+            guard (200...299).contains(httpResponse.statusCode) else {
+                // Read error body
+                var errorBody = ""
+                for try await line in bytes.lines {
+                    errorBody += line
+                }
+                throw AISecureError.httpError(status: httpResponse.statusCode, body: errorBody)
+            }
+
+            // Process Server-Sent Events (SSE)
+            for try await line in bytes.lines {
+                // SSE format: "data: {json}\n"
+                if line.hasPrefix("data: ") {
+                    let jsonString = String(line.dropFirst(6)) // Remove "data: " prefix
+
+                    // Check for stream end
+                    if jsonString == "[DONE]" {
+                        logIf(.debug)?.debug("⚡ Stream complete")
+                        break
+                    }
+
+                    // Parse JSON chunk
+                    if let data = jsonString.data(using: .utf8) {
+                        do {
+                            let delta = try JSONDecoder().decode(OpenAIChatStreamDelta.self, from: data)
+                            onChunk(delta)
+                        } catch {
+                            // Skip malformed chunks
+                            logIf(.debug)?.debug("Failed to decode chunk: \(error)")
+                        }
+                    }
+                }
+            }
+
+            return (Data(), response) // Dummy return to satisfy executeWithRetry
+        }
     }
 }

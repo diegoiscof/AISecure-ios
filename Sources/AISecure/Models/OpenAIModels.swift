@@ -117,6 +117,41 @@ public struct OpenAITranscriptionResponse: Codable, Sendable {
     }
 }
 
+// MARK: - Streaming Chat Models
+
+/// Streaming response chunk from OpenAI chat completions
+public struct OpenAIChatStreamDelta: Codable, Sendable {
+    public let id: String
+    public let object: String
+    public let created: Int
+    public let model: String
+    public let choices: [StreamChoice]
+
+    public struct StreamChoice: Codable, Sendable {
+        public let index: Int
+        public let delta: Delta
+        public let finishReason: String?
+
+        enum CodingKeys: String, CodingKey {
+            case index, delta
+            case finishReason = "finish_reason"
+        }
+    }
+
+    public struct Delta: Codable, Sendable {
+        public let role: String?
+        public let content: String?
+    }
+
+    public init(id: String, object: String, created: Int, model: String, choices: [StreamChoice]) {
+        self.id = id
+        self.object = object
+        self.created = created
+        self.model = model
+        self.choices = choices
+    }
+}
+
 // MARK: - Moderation
 
 public struct OpenAIModerationResponse: Codable, Sendable {

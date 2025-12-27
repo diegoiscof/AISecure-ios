@@ -106,6 +106,49 @@ import Foundation
         )
     }
 
+    /// Creates a streaming chat completion request using Grok
+    ///
+    /// Grok uses OpenAI-compatible streaming API format
+    ///
+    /// - Parameters:
+    ///   - messages: Array of chat messages
+    ///   - model: The model to use (default: "grok-4")
+    ///   - temperature: Sampling temperature between 0 and 2 (default: 0.7)
+    ///   - maxTokens: Maximum tokens to generate (optional)
+    ///   - onChunk: Closure called for each streamed chunk with delta content
+    /// - Throws: AISecureError if the request fails
+    public func chatStream(
+        messages: [ChatMessage],
+        model: String = "grok-4",
+        temperature: Double = 0.7,
+        maxTokens: Int? = nil,
+        onChunk: @escaping @Sendable (OpenAIChatStreamDelta) -> Void
+    ) async throws {
+        guard !messages.isEmpty else {
+            throw AISecureError.invalidConfiguration("Messages cannot be empty")
+        }
+        guard (0...2).contains(temperature) else {
+            throw AISecureError.invalidConfiguration("Temperature must be between 0 and 2")
+        }
+
+        var body: [String: Any] = [
+            "model": model,
+            "messages": messages.map { ["role": $0.role, "content": $0.content] },
+            "temperature": temperature,
+            "stream": true  // ⭐ Enable streaming
+        ]
+
+        if let maxTokens = maxTokens {
+            body["max_tokens"] = maxTokens
+        }
+
+        try await streamRequest(
+            endpoint: "/v1/chat/completions",
+            body: body,
+            onChunk: onChunk
+        )
+    }
+
     // MARK: - Private Methods
 
     private func jsonRequest<T: Decodable>(
@@ -135,6 +178,73 @@ import Foundation
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
             throw AISecureError.decodingError(error)
+        }
+    }
+
+    private func streamRequest(
+        endpoint: String,
+        body: [String: Any],
+        onChunk: @escaping @Sendable (OpenAIChatStreamDelta) -> Void
+    ) async throws {
+        let bodyData = try JSONSerialization.data(
+            withJSONObject: body,
+            options: [.sortedKeys]
+        )
+
+        try await AISecureServiceHelpers.executeWithRetry(
+            deviceAuthenticator: deviceAuthenticator,
+            sessionManager: sessionManager,
+            configuration: configuration
+        ) { service, session in
+            let request = self.requestBuilder.buildRequest(
+                endpoint: endpoint,
+                body: bodyData,
+                session: session,
+                service: service
+            )
+
+            // Use URLSession.bytes for streaming
+            let (bytes, response) = try await self.urlSession.bytes(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw AISecureError.invalidResponse
+            }
+
+            guard (200...299).contains(httpResponse.statusCode) else {
+                // Read error body
+                var errorBody = ""
+                for try await line in bytes.lines {
+                    errorBody += line
+                }
+                throw AISecureError.httpError(status: httpResponse.statusCode, body: errorBody)
+            }
+
+            // Process Server-Sent Events (SSE)
+            for try await line in bytes.lines {
+                // SSE format: "data: {json}\n"
+                if line.hasPrefix("data: ") {
+                    let jsonString = String(line.dropFirst(6)) // Remove "data: " prefix
+
+                    // Check for stream end
+                    if jsonString == "[DONE]" {
+                        logIf(.debug)?.debug("⚡ Grok stream complete")
+                        break
+                    }
+
+                    // Parse JSON chunk
+                    if let data = jsonString.data(using: .utf8) {
+                        do {
+                            let delta = try JSONDecoder().decode(OpenAIChatStreamDelta.self, from: data)
+                            onChunk(delta)
+                        } catch {
+                            // Skip malformed chunks
+                            logIf(.debug)?.debug("Failed to decode Grok chunk: \(error)")
+                        }
+                    }
+                }
+            }
+
+            return (Data(), response) // Dummy return to satisfy executeWithRetry
         }
     }
 }
