@@ -417,12 +417,8 @@ import Foundation
             }
 
             guard (200...299).contains(httpResponse.statusCode) else {
-                // Read error body
-                var errorBody = ""
-                for try await line in bytes.lines {
-                    errorBody += line
-                }
-                throw AISecureError.httpError(status: httpResponse.statusCode, body: errorBody)
+                // Don't consume the bytes iterator - just throw and let retry mechanism handle it
+                throw AISecureError.httpError(status: httpResponse.statusCode, body: "HTTP \(httpResponse.statusCode)")
             }
 
             // Process Server-Sent Events (SSE)
@@ -483,11 +479,8 @@ import Foundation
             }
 
             guard (200...299).contains(httpResponse.statusCode) else {
-                var errorBody = ""
-                for try await line in bytes.lines {
-                    errorBody += line
-                }
-                throw AISecureError.httpError(status: httpResponse.statusCode, body: errorBody)
+                // Don't consume the bytes iterator - just throw and let retry mechanism handle it
+                throw AISecureError.httpError(status: httpResponse.statusCode, body: "HTTP \(httpResponse.statusCode)")
             }
 
             // Process Server-Sent Events (SSE) with event-based format
