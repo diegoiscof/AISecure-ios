@@ -7,26 +7,26 @@
 
 import Foundation
 
-@AISecureActor public class GrokService: Sendable {
-    private var configuration: AISecureConfiguration
-    private let sessionManager: AISecureSessionManager
+@AISecureActor
+public final class GrokService: Sendable {
+    private let configuration: AISecureConfiguration
     private let requestBuilder: AISecureRequestBuilder
     private let urlSession: URLSession
-    private let deviceAuthenticator: AISecureDeviceAuthenticator?
-
+    private let deviceAuthenticator: AISecureDeviceAuthenticator
+    
     nonisolated init(
         configuration: AISecureConfiguration,
-        sessionManager: AISecureSessionManager,
         requestBuilder: AISecureRequestBuilder,
         urlSession: URLSession,
-        deviceAuthenticator: AISecureDeviceAuthenticator? = nil
+        deviceAuthenticator: AISecureDeviceAuthenticator
     ) {
         self.configuration = configuration
-        self.sessionManager = sessionManager
         self.requestBuilder = requestBuilder
         self.urlSession = urlSession
         self.deviceAuthenticator = deviceAuthenticator
     }
+
+    // MARK: - Public API
 
     /// Creates a chat completion request using Grok
     ///
@@ -135,7 +135,7 @@ import Foundation
             "model": model,
             "messages": messages.map { ["role": $0.role, "content": $0.content] },
             "temperature": temperature,
-            "stream": true  // ⭐ Enable streaming
+            "stream": true
         ]
 
         if let maxTokens = maxTokens {
@@ -157,10 +157,9 @@ import Foundation
         response: T.Type
     ) async throws -> T {
         let bodyData = try JSONSerialization.data(withJSONObject: body)
-
+        
         let (data, urlResponse) = try await AISecureServiceHelpers.executeWithRetry(
             deviceAuthenticator: deviceAuthenticator,
-            sessionManager: sessionManager,
             configuration: configuration
         ) { service, session in
             let request = self.requestBuilder.buildRequest(
@@ -171,13 +170,16 @@ import Foundation
             )
             return try await self.urlSession.data(for: request)
         }
-
+        
         try AISecureServiceHelpers.validateResponse(urlResponse, data: data)
-
+        
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
-            throw AISecureError.decodingError(error)
+            if let responseString = String(data: data, encoding: .utf8) {
+                logIf(.error)?.error("❌ Decoding failed: \(responseString)")
+            }
+            throw AISecureError.decodingError(error.localizedDescription)
         }
     }
 
@@ -186,14 +188,10 @@ import Foundation
         body: [String: Any],
         onChunk: @escaping @Sendable (OpenAIChatStreamDelta) -> Void
     ) async throws {
-        let bodyData = try JSONSerialization.data(
-            withJSONObject: body,
-            options: [.sortedKeys]
-        )
+        let bodyData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
-        try await AISecureServiceHelpers.executeWithRetry(
+        let _: (Data, URLResponse) = try await AISecureServiceHelpers.executeWithRetry(
             deviceAuthenticator: deviceAuthenticator,
-            sessionManager: sessionManager,
             configuration: configuration
         ) { service, session in
             let request = self.requestBuilder.buildRequest(
@@ -203,7 +201,6 @@ import Foundation
                 service: service
             )
 
-            // Use URLSession.bytes for streaming
             let (bytes, response) = try await self.urlSession.bytes(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
@@ -211,36 +208,40 @@ import Foundation
             }
 
             guard (200...299).contains(httpResponse.statusCode) else {
-                // Don't consume the bytes iterator - just throw and let retry mechanism handle it
-                throw AISecureError.httpError(status: httpResponse.statusCode, body: "HTTP \(httpResponse.statusCode)")
+                // Read error body for better error messages
+                var errorData = Data()
+                for try await byte in bytes {
+                    errorData.append(byte)
+                    if errorData.count > 1024 { break }
+                }
+                throw AISecureError.httpError(
+                    status: httpResponse.statusCode,
+                    body: HTTPErrorBody(from: errorData)
+                )
             }
 
-            // Process Server-Sent Events (SSE)
+            // Process OpenAI-compatible SSE format
             for try await line in bytes.lines {
-                // SSE format: "data: {json}\n"
                 if line.hasPrefix("data: ") {
-                    let jsonString = String(line.dropFirst(6)) // Remove "data: " prefix
+                    let jsonString = String(line.dropFirst(6))
 
-                    // Check for stream end
                     if jsonString == "[DONE]" {
                         logIf(.debug)?.debug("⚡ Grok stream complete")
                         break
                     }
 
-                    // Parse JSON chunk
                     if let data = jsonString.data(using: .utf8) {
                         do {
                             let delta = try JSONDecoder().decode(OpenAIChatStreamDelta.self, from: data)
                             onChunk(delta)
                         } catch {
-                            // Skip malformed chunks
-                            logIf(.debug)?.debug("Failed to decode Grok chunk: \(error)")
+                            logIf(.debug)?.debug("Skipping malformed Grok chunk: \(error.localizedDescription)")
                         }
                     }
                 }
             }
 
-            return (Data(), response) // Dummy return to satisfy executeWithRetry
+            return (Data(), response)
         }
     }
 }

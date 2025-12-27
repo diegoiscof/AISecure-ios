@@ -7,27 +7,26 @@
 
 import Foundation
 
-@AISecureActor public class AnthropicService: Sendable {
-    private var configuration: AISecureConfiguration
-    private let sessionManager: AISecureSessionManager
+@AISecureActor
+public final class AnthropicService: Sendable {
+    private let configuration: AISecureConfiguration
     private let requestBuilder: AISecureRequestBuilder
     private let urlSession: URLSession
-    private let deviceAuthenticator: AISecureDeviceAuthenticator?
-
+    private let deviceAuthenticator: AISecureDeviceAuthenticator
+    
     nonisolated init(
         configuration: AISecureConfiguration,
-        sessionManager: AISecureSessionManager,
         requestBuilder: AISecureRequestBuilder,
         urlSession: URLSession,
-        deviceAuthenticator: AISecureDeviceAuthenticator? = nil
+        deviceAuthenticator: AISecureDeviceAuthenticator
     ) {
         self.configuration = configuration
-        self.sessionManager = sessionManager
         self.requestBuilder = requestBuilder
         self.urlSession = urlSession
         self.deviceAuthenticator = deviceAuthenticator
     }
 
+    // MARK: - Public API
 
     /// Creates a message with Claude
     ///
@@ -92,7 +91,7 @@ import Foundation
             "messages": messages.map { ["role": $0.role, "content": $0.content] },
             "max_tokens": maxTokens,
             "temperature": temperature,
-            "stream": true  // ⭐ Enable streaming
+            "stream": true
         ]
 
         try await streamRequest(
@@ -110,10 +109,9 @@ import Foundation
         response: T.Type
     ) async throws -> T {
         let bodyData = try JSONSerialization.data(withJSONObject: body)
-
+        
         let (data, urlResponse) = try await AISecureServiceHelpers.executeWithRetry(
             deviceAuthenticator: deviceAuthenticator,
-            sessionManager: sessionManager,
             configuration: configuration
         ) { service, session in
             let request = self.requestBuilder.buildRequest(
@@ -124,13 +122,16 @@ import Foundation
             )
             return try await self.urlSession.data(for: request)
         }
-
+        
         try AISecureServiceHelpers.validateResponse(urlResponse, data: data)
-
+        
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
-            throw AISecureError.decodingError(error)
+            if let responseString = String(data: data, encoding: .utf8) {
+                logIf(.error)?.error("❌ Decoding failed: \(responseString)")
+            }
+            throw AISecureError.decodingError(error.localizedDescription)
         }
     }
 
@@ -139,14 +140,10 @@ import Foundation
         body: [String: Any],
         onChunk: @escaping @Sendable (AnthropicStreamDelta) -> Void
     ) async throws {
-        let bodyData = try JSONSerialization.data(
-            withJSONObject: body,
-            options: [.sortedKeys]
-        )
+        let bodyData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
-        try await AISecureServiceHelpers.executeWithRetry(
+        let _: (Data, URLResponse) = try await AISecureServiceHelpers.executeWithRetry(
             deviceAuthenticator: deviceAuthenticator,
-            sessionManager: sessionManager,
             configuration: configuration
         ) { service, session in
             let request = self.requestBuilder.buildRequest(
@@ -156,41 +153,43 @@ import Foundation
                 service: service
             )
 
-            // Use URLSession.bytes for streaming
             let (bytes, response) = try await self.urlSession.bytes(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
-//                throw AISecureError.networkError("Invalid response type")
                 throw AISecureError.invalidResponse
             }
 
             guard (200...299).contains(httpResponse.statusCode) else {
-                // Don't consume the bytes iterator - just throw and let retry mechanism handle it
-                throw AISecureError.httpError(status: httpResponse.statusCode, body: "HTTP \(httpResponse.statusCode)")
+                // Read error body for better error messages
+                var errorData = Data()
+                for try await byte in bytes {
+                    errorData.append(byte)
+                    if errorData.count > 1024 { break }
+                }
+                throw AISecureError.httpError(
+                    status: httpResponse.statusCode,
+                    body: HTTPErrorBody(from: errorData)
+                )
             }
 
-            // Process Server-Sent Events (SSE)
+            // Process Anthropic SSE format
             for try await line in bytes.lines {
-                // Anthropic SSE format: "event: content_block_delta\ndata: {json}\n"
                 if line.hasPrefix("data: ") {
-                    let jsonString = String(line.dropFirst(6)) // Remove "data: " prefix
-                    // Parse JSON chunk
+                    let jsonString = String(line.dropFirst(6))
+                    
                     if let data = jsonString.data(using: .utf8) {
-                        do {
-                            if let delta = try? JSONDecoder().decode(AnthropicStreamDelta.self, from: data) {
-                                onChunk(delta)
-                                if delta.type == "message_stop" {
-                                    break
-                                }
+                        if let delta = try? JSONDecoder().decode(AnthropicStreamDelta.self, from: data) {
+                            onChunk(delta)
+                            if delta.type == "message_stop" {
+                                logIf(.debug)?.debug("⚡ Anthropic stream complete")
+                                break
                             }
-                        } catch {
-                            // Skip malformed chunks
-                            logIf(.debug)?.debug("Failed to decode chunk: \(error)")
                         }
                     }
                 }
             }
-            return (Data(), response) // Dummy return to satisfy executeWithRetry
+            
+            return (Data(), response)
         }
     }
 }

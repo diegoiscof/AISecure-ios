@@ -8,21 +8,18 @@
 import Foundation
 
 @AISecureActor public class GeminiService: Sendable {
-    private var configuration: AISecureConfiguration
-    private let sessionManager: AISecureSessionManager
+    private let configuration: AISecureConfiguration
     private let requestBuilder: AISecureRequestBuilder
     private let urlSession: URLSession
-    private let deviceAuthenticator: AISecureDeviceAuthenticator?
-
+    private let deviceAuthenticator: AISecureDeviceAuthenticator
+    
     nonisolated init(
         configuration: AISecureConfiguration,
-        sessionManager: AISecureSessionManager,
         requestBuilder: AISecureRequestBuilder,
         urlSession: URLSession,
-        deviceAuthenticator: AISecureDeviceAuthenticator? = nil
+        deviceAuthenticator: AISecureDeviceAuthenticator
     ) {
         self.configuration = configuration
-        self.sessionManager = sessionManager
         self.requestBuilder = requestBuilder
         self.urlSession = urlSession
         self.deviceAuthenticator = deviceAuthenticator
@@ -142,10 +139,9 @@ import Foundation
         response: T.Type
     ) async throws -> T {
         let bodyData = try JSONSerialization.data(withJSONObject: body)
-
+        
         let (data, urlResponse) = try await AISecureServiceHelpers.executeWithRetry(
             deviceAuthenticator: deviceAuthenticator,
-            sessionManager: sessionManager,
             configuration: configuration
         ) { service, session in
             let request = self.requestBuilder.buildRequest(
@@ -156,13 +152,16 @@ import Foundation
             )
             return try await self.urlSession.data(for: request)
         }
-
+        
         try AISecureServiceHelpers.validateResponse(urlResponse, data: data)
-
+        
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
-            throw AISecureError.decodingError(error)
+            if let responseString = String(data: data, encoding: .utf8) {
+                logIf(.error)?.error("❌ Decoding failed: \(responseString)")
+            }
+            throw AISecureError.decodingError(error.localizedDescription)
         }
     }
 }

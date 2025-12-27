@@ -8,21 +8,18 @@
 import Foundation
 
 @AISecureActor public class OpenAIService: Sendable {
-    private var configuration: AISecureConfiguration
-    private let sessionManager: AISecureSessionManager
+    private let configuration: AISecureConfiguration
     private let requestBuilder: AISecureRequestBuilder
     private let urlSession: URLSession
-    private let deviceAuthenticator: AISecureDeviceAuthenticator?
-
+    private let deviceAuthenticator: AISecureDeviceAuthenticator
+    
     nonisolated init(
         configuration: AISecureConfiguration,
-        sessionManager: AISecureSessionManager,
         requestBuilder: AISecureRequestBuilder,
         urlSession: URLSession,
-        deviceAuthenticator: AISecureDeviceAuthenticator? = nil
+        deviceAuthenticator: AISecureDeviceAuthenticator
     ) {
         self.configuration = configuration
-        self.sessionManager = sessionManager
         self.requestBuilder = requestBuilder
         self.urlSession = urlSession
         self.deviceAuthenticator = deviceAuthenticator
@@ -331,10 +328,9 @@ import Foundation
         response: T.Type
     ) async throws -> T {
         let bodyData = try JSONSerialization.data(withJSONObject: body)
-
+        
         let (data, urlResponse) = try await AISecureServiceHelpers.executeWithRetry(
             deviceAuthenticator: deviceAuthenticator,
-            sessionManager: sessionManager,
             configuration: configuration
         ) { service, session in
             let request = self.requestBuilder.buildRequest(
@@ -345,17 +341,16 @@ import Foundation
             )
             return try await self.urlSession.data(for: request)
         }
-
+        
         try AISecureServiceHelpers.validateResponse(urlResponse, data: data)
-
+        
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
-            // Log the raw response for debugging
             if let responseString = String(data: data, encoding: .utf8) {
-                logIf(.error)?.error("❌ Decoding failed. Raw response: \(responseString)")
+                logIf(.error)?.error("❌ Decoding failed: \(responseString)")
             }
-            throw AISecureError.decodingError(error)
+            throw AISecureError.decodingError(error.localizedDescription)
         }
     }
 
@@ -363,14 +358,10 @@ import Foundation
         endpoint: String,
         body: [String: Any]
     ) async throws -> Data {
-        let bodyData = try JSONSerialization.data(
-            withJSONObject: body,
-            options: [.sortedKeys]
-        )
-
+        let bodyData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        
         let (data, urlResponse) = try await AISecureServiceHelpers.executeWithRetry(
             deviceAuthenticator: deviceAuthenticator,
-            sessionManager: sessionManager,
             configuration: configuration
         ) { service, session in
             let request = self.requestBuilder.buildRequest(
@@ -381,7 +372,7 @@ import Foundation
             )
             return try await self.urlSession.data(for: request)
         }
-
+        
         try AISecureServiceHelpers.validateResponse(urlResponse, data: data)
         return data
     }
@@ -391,14 +382,10 @@ import Foundation
         body: [String: Any],
         onChunk: @escaping @Sendable (OpenAIChatStreamDelta) -> Void
     ) async throws {
-        let bodyData = try JSONSerialization.data(
-            withJSONObject: body,
-            options: [.sortedKeys]
-        )
-
-        try await AISecureServiceHelpers.executeWithRetry(
+        let bodyData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        
+        let _: (Data, URLResponse) = try await AISecureServiceHelpers.executeWithRetry(
             deviceAuthenticator: deviceAuthenticator,
-            sessionManager: sessionManager,
             configuration: configuration
         ) { service, session in
             let request = self.requestBuilder.buildRequest(
@@ -407,46 +394,48 @@ import Foundation
                 session: session,
                 service: service
             )
-
-            // Use URLSession.bytes for streaming
+            
             let (bytes, response) = try await self.urlSession.bytes(for: request)
-
+            
             guard let httpResponse = response as? HTTPURLResponse else {
-//                throw AISecureError.networkError("Invalid response type")
                 throw AISecureError.invalidResponse
             }
-
+            
             guard (200...299).contains(httpResponse.statusCode) else {
-                // Don't consume the bytes iterator - just throw and let retry mechanism handle it
-                throw AISecureError.httpError(status: httpResponse.statusCode, body: "HTTP \(httpResponse.statusCode)")
+                // Read error body for better error messages
+                var errorData = Data()
+                for try await byte in bytes {
+                    errorData.append(byte)
+                    if errorData.count > 1024 { break } // Limit error body size
+                }
+                throw AISecureError.httpError(
+                    status: httpResponse.statusCode,
+                    body: HTTPErrorBody(from: errorData)
+                )
             }
-
-            // Process Server-Sent Events (SSE)
+            
+            // Process SSE stream
             for try await line in bytes.lines {
-                // SSE format: "data: {json}\n"
                 if line.hasPrefix("data: ") {
-                    let jsonString = String(line.dropFirst(6)) // Remove "data: " prefix
-
-                    // Check for stream end
+                    let jsonString = String(line.dropFirst(6))
+                    
                     if jsonString == "[DONE]" {
                         logIf(.debug)?.debug("⚡ Stream complete")
                         break
                     }
-
-                    // Parse JSON chunk
+                    
                     if let data = jsonString.data(using: .utf8) {
                         do {
                             let delta = try JSONDecoder().decode(OpenAIChatStreamDelta.self, from: data)
                             onChunk(delta)
                         } catch {
-                            // Skip malformed chunks
-                            logIf(.debug)?.debug("Failed to decode chunk: \(error)")
+                            logIf(.debug)?.debug("Skipping malformed chunk: \(error.localizedDescription)")
                         }
                     }
                 }
             }
-
-            return (Data(), response) // Dummy return to satisfy executeWithRetry
+            
+            return (Data(), response)
         }
     }
 
@@ -455,14 +444,10 @@ import Foundation
         body: [String: Any],
         onChunk: @escaping @Sendable (OpenAIResponseStreamEvent) -> Void
     ) async throws {
-        let bodyData = try JSONSerialization.data(
-            withJSONObject: body,
-            options: [.sortedKeys]
-        )
-
-        try await AISecureServiceHelpers.executeWithRetry(
+        let bodyData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        
+        let _: (Data, URLResponse) = try await AISecureServiceHelpers.executeWithRetry(
             deviceAuthenticator: deviceAuthenticator,
-            sessionManager: sessionManager,
             configuration: configuration
         ) { service, session in
             let request = self.requestBuilder.buildRequest(
@@ -471,47 +456,51 @@ import Foundation
                 session: session,
                 service: service
             )
-
+            
             let (bytes, response) = try await self.urlSession.bytes(for: request)
-
+            
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw AISecureError.invalidResponse
             }
-
+            
             guard (200...299).contains(httpResponse.statusCode) else {
-                // Don't consume the bytes iterator - just throw and let retry mechanism handle it
-                throw AISecureError.httpError(status: httpResponse.statusCode, body: "HTTP \(httpResponse.statusCode)")
-            }
-
-            // Process Server-Sent Events (SSE) with event-based format
-            // Responses API uses: "event: <name>\ndata: <json>\n"
-            var currentEvent: String? = nil
-
-            for try await line in bytes.lines {
-                // Parse event name
-                if line.hasPrefix("event: ") {
-                    currentEvent = String(line.dropFirst(7))
+                var errorData = Data()
+                for try await byte in bytes {
+                    errorData.append(byte)
+                    if errorData.count > 1024 { break }
                 }
-                // Parse data
-                else if line.hasPrefix("data: ") {
+                throw AISecureError.httpError(
+                    status: httpResponse.statusCode,
+                    body: HTTPErrorBody(from: errorData)
+                )
+            }
+            
+            // Process SSE with event-based format
+            for try await line in bytes.lines {
+                if line.hasPrefix("event: ") {
+                    // Event name - could track if needed
+                    continue
+                }
+                
+                if line.hasPrefix("data: ") {
                     let jsonString = String(line.dropFirst(6))
-
+                    
                     if jsonString == "[DONE]" {
                         logIf(.debug)?.debug("⚡ Response stream complete")
                         break
                     }
-
+                    
                     if let data = jsonString.data(using: .utf8) {
                         do {
                             let event = try JSONDecoder().decode(OpenAIResponseStreamEvent.self, from: data)
                             onChunk(event)
                         } catch {
-                            logIf(.debug)?.debug("Failed to decode response event: \(error)")
+                            logIf(.debug)?.debug("Skipping malformed event: \(error.localizedDescription)")
                         }
                     }
                 }
             }
-
+            
             return (Data(), response)
         }
     }
