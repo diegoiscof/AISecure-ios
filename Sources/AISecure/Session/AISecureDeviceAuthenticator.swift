@@ -189,7 +189,7 @@ public final class AISecureDeviceAuthenticator: Sendable {
     
     /// Perform the actual authentication request
     private func performAuthentication() async throws -> DeviceJWT {
-        let endpoint = backendURL.appendingPathComponent("/auth/device")
+        let endpoint = backendURL.appendingPathComponent("/api/auth/device")
         
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
