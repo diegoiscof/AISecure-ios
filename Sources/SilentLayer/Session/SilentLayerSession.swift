@@ -14,7 +14,8 @@ public struct SilentLayerSession: Codable, Sendable {
     public let serviceURL: String
 
     public var isExpired: Bool {
-        return Date().timeIntervalSince1970 > Double(expiresAt)
+        // expiresAt is in milliseconds, convert current time to ms for comparison
+        return Date().timeIntervalSince1970 * 1000 > Double(expiresAt)
     }
 
     public init(sessionToken: String, expiresAt: Int, provider: String, serviceURL: String) {

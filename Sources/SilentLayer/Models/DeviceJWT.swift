@@ -49,6 +49,7 @@ public struct DeviceJWT: Codable, Sendable {
 
     /// Check if JWT is expired
     public var isExpired: Bool {
-        return Date().timeIntervalSince1970 > Double(expiresAt)
+        // expiresAt is in milliseconds, convert current time to ms for comparison
+        return Date().timeIntervalSince1970 * 1000 > Double(expiresAt)
     }
 }
