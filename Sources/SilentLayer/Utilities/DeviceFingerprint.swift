@@ -20,7 +20,7 @@ import Security
 /// - Survives app reinstalls
 public enum DeviceIdentifier {
     
-    private static let service = "com.aisecure.device"
+    private static let service = "ai.silentlayer.device"
     private static let account = "device-id"
     
     // MARK: - Public API
