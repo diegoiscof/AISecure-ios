@@ -1,6 +1,6 @@
 ![Swift](https://img.shields.io/badge/Swift-5.9+-orange.svg)
 ![Platforms](https://img.shields.io/badge/Platforms-iOS%20%7C%20macOS-blue.svg)
-![License](https://img.shields.io/badge/License-MIT-green.svg)
+![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)
 
 # SilentLayer iOS/macOS SDK
 ### Mobile-first AI infrastructure for mobile apps
